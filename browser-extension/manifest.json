@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "赛博刘看山",
+  "version": "0.1.8",
+  "description": "赛博刘看山 - 你的下一个电子伴侣为什么不可以是看山呢？",
+  "action": {
+    "default_title": "赛博刘看山",
+    "default_icon": {
+      "16": "liukanshan-avatar-16.png",
+      "32": "liukanshan-avatar-32.png",
+      "48": "liukanshan-avatar-48.png"
+    },
+    "default_popup": "popup.html"
+  },
+  "icons": {
+    "16": "liukanshan-avatar-16.png",
+    "32": "liukanshan-avatar-32.png",
+    "48": "liukanshan-avatar-48.png",
+    "96": "liukanshan-avatar-96.png",
+    "128": "liukanshan-avatar-128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": [
+    "alarms",
+    "cookies",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.zhihu.com/*",
+    "https://kanshan.r2049.cn/*",
+    "https://zh.r2049.cn/*"
+  ]
+}

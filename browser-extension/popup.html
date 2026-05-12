@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>赛博刘看山</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header class="brand">
+      <a id="server-home-link" href="#" class="brand-link" title="打开服务端主页">
+        <img src="liukanshan-avatar.jpg" alt="赛博刘看山" class="brand-avatar">
+        <span class="brand-copy">
+          <h1>赛博刘看山</h1>
+          <span id="version" class="version-line"></span>
+        </span>
+      </a>
+      <div class="connection-row">
+        <p id="status">未登录</p>
+        <a id="logout-browser" class="logout-link" href="#" hidden>退出登录</a>
+      </div>
+    </header>
+
+    <form id="login-form">
+      <button id="web-auth-login" type="button">使用 Web 授权登录</button>
+      <label>
+        邮箱账号
+        <input id="login-email" name="email" type="email" 
+        autocomplete="username" placeholder="请输入邮箱账号" required>
+      </label>
+      <label>
+        密码
+        <input id="login-password" name="password" type="password" autocomplete="current-password" minlength="8" required>
+      </label>
+      <button type="submit">登录</button>
+    </form>
+
+    <section id="tools-section" hidden>
+      <section class="overview-card" aria-label="今日概览">
+        <div class="overview-head">
+          <div class="overview-title-row">
+            <h2>今日概览</h2>
+            <a
+              id="open-zhihu-link"
+              class="overview-link"
+              href="https://www.zhihu.com/"
+              target="_blank"
+              rel="noreferrer"
+            >打开知乎</a>
+          </div>
+          <p id="last-report" class="meta-line">最后上报时间：暂无</p>
+        </div>
+        <div class="metric-grid">
+          <button
+            id="metric-read-link"
+            class="metric-item"
+            type="button"
+            title="打开知乎创作数据"
+          >
+            <p>阅读</p>
+            <strong id="metric-read">-</strong>
+            <small id="metric-read-time">-</small>
+          </button>
+          <button
+            id="metric-agree-link"
+            class="metric-item"
+            type="button"
+            title="打开知乎消息"
+          >
+            <p>赞同</p>
+            <strong id="metric-agree">-</strong>
+            <small id="metric-agree-time">-</small>
+          </button>
+          <button
+            id="metric-comment-link"
+            class="metric-item"
+            type="button"
+            title="打开知乎消息"
+          >
+            <p>评论</p>
+            <strong id="metric-comment">-</strong>
+            <small id="metric-comment-time">-</small>
+          </button>
+          <button
+            id="metric-message-link"
+            class="metric-item"
+            type="button"
+            title="打开知乎消息"
+          >
+            <p>消息</p>
+            <strong id="metric-message">-</strong>
+            <small id="metric-message-time">-</small>
+          </button>
+        </div>
+      </section>
+      <div class="button-stack">
+        <button id="report-dashboard" type="button">立即上报数据</button>
+        <button id="open-dashboard" type="button">打开数据看板</button>
+        <button id="poll-now" type="button">检查设备消息</button>
+      </div>
+    </section>
+    <p id="feedback" class="feedback" aria-live="polite"></p>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

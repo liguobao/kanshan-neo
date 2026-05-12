@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>赛博刘看山 - 数据看板</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <main class="dashboard-wrap">
+    <header class="top-header">
+      <div class="brand">
+        <img class="brand-avatar" src="liukanshan-avatar.jpg" alt="赛博刘看山">
+        <div class="brand-title">
+          <h1>赛博刘看山 - 数据看板</h1>
+          <p>按知乎登录态读取最近 3 天数据</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="refresh-dashboard" type="button">刷新全部</button>
+        <button id="push-dashboard" type="button">立即上报</button>
+        <button id="open-popup" type="button">返回插件</button>
+      </div>
+    </header>
+
+    <p id="dashboard-status" class="status">加载中…</p>
+
+    <section class="summary-grid">
+      <section class="card">
+        <div class="card-title-row">
+          <h2>个人信息</h2>
+          <a href="https://www.zhihu.com/creator" target="_blank" rel="noreferrer">查看</a>
+        </div>
+        <div class="profile-row">
+          <img id="profile-avatar" src="liukanshan-avatar.jpg" alt="刘看山头像">
+          <div class="profile-content">
+            <p><span>姓名</span><strong id="profile-name">未登录</strong></p>
+            <p><span>授权状态</span><strong id="profile-auth">未授权</strong></p>
+            <p><span>数据刷新</span><strong id="profile-auth-time">暂无</strong></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-title-row">
+          <h2>今日概览</h2>
+          <div class="card-links">
+            <a href="https://www.zhihu.com/" target="_blank" rel="noreferrer">打开知乎</a>
+            <a href="https://www.zhihu.com/creator/analytics/work/all" target="_blank" rel="noreferrer">创作</a>
+            <a href="https://www.zhihu.com/notifications" target="_blank" rel="noreferrer">消息</a>
+          </div>
+        </div>
+        <div id="today-metrics" class="kpi-grid">
+          <article class="kpi-item">
+            <p>阅读</p>
+            <strong id="today-read">-</strong>
+            <small id="today-read-time">-</small>
+          </article>
+          <article class="kpi-item">
+            <p>赞同</p>
+            <strong id="today-agree">-</strong>
+            <small id="today-agree-time">-</small>
+          </article>
+          <article class="kpi-item">
+            <p>评论</p>
+            <strong id="today-comment">-</strong>
+            <small id="today-comment-time">-</small>
+          </article>
+          <article class="kpi-item">
+            <p>消息</p>
+            <strong id="today-message">-</strong>
+            <small id="today-message-time">-</small>
+          </article>
+        </div>
+      </section>
+    </section>
+
+    <section class="card">
+      <div class="tabs" role="tablist">
+        <button id="tab-recommend" class="tab-button active" type="button" data-target="panel-recommend">推荐回答</button>
+        <button id="tab-answers" class="tab-button" type="button" data-target="panel-answers">我的回答</button>
+      </div>
+
+      <div id="panel-recommend" class="tab-panel active">
+        <ul id="recommend-list" class="simple-list"></ul>
+      </div>
+
+      <div id="panel-answers" class="tab-panel">
+        <div class="table-headline">标题 / 日期 / 阅读 / 互动</div>
+        <table class="plain-table">
+          <thead>
+            <tr>
+              <th>标题</th>
+              <th>日期</th>
+              <th>阅读</th>
+              <th>互动</th>
+            </tr>
+          </thead>
+          <tbody id="answers-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="dashboard.js"></script>
+</body>
+</html>
