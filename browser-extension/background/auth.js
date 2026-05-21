@@ -9,6 +9,7 @@ import {
 import {
   refreshLocalMessageStats,
   reportDashboardSnapshot,
+  validateZhihuSession,
 } from "./dashboard.js";
 import { closeMessageSocket, startMessageSocket } from "./messages.js";
 import {
@@ -118,7 +119,15 @@ export async function validateBrowserSession() {
       error: `登录状态检查失败：HTTP ${response.status}`,
     };
   }
-  return { ok: true };
+
+  const zhihuSession = await validateZhihuSession();
+  if (!zhihuSession.ok) {
+    return zhihuSession;
+  }
+  return {
+    ok: true,
+    zhihuProfileName: zhihuSession.profileName || "",
+  };
 }
 
 export async function loginWithPassword({ serverBaseUrl, email, password }) {

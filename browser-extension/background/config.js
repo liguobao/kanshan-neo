@@ -16,8 +16,12 @@ export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const DEFAULT_SERVER_BASE_URL = "https://kanshan.r2049.cn";
 export const FALLBACK_SERVER_BASE_URLS = ["https://zh.r2049.cn"];
 export const WEB_AUTH_COOKIE_NAME = "kanshan-server-token";
+export const ZHIHU_HOME_URL = "https://www.zhihu.com/";
+export const ZHIHU_AUTH_COOKIE_NAMES = ["z_c0"];
 export const BROWSER_SESSION_REGISTER_URL = "/api/browser/register";
 export const BROWSER_MESSAGE_BATCH_LIMIT = 2;
+export const BROWSER_MESSAGE_OPEN_LIMIT = 3;
+export const BROWSER_MESSAGE_OPEN_WINDOW_MS = 60_000;
 export const BROWSER_MESSAGE_WS_PATH = "/api/browser/messages/ws";
 export const BROWSER_MESSAGE_WS_TOKEN_PROTOCOL = "kanshan-browser-token";
 export const BROWSER_MESSAGE_WS_PING_MS = 20_000;
@@ -52,6 +56,8 @@ export const CREATOR_RECOMMEND_URL =
 export const CREATOR_ANSWER_LIST_URL =
   "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/list";
 export const MOMENTS_URL = "https://www.zhihu.com/api/v3/moments";
+export const DEFAULT_NOTIFICATIONS_URL =
+  "https://www.zhihu.com/api/v4/notifications/v2/default";
 
 export const NOTICE_COUNT_FIELDS = {
   unread: ["default_notifications_count", "messages_count"],

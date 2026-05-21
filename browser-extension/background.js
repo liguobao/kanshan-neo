@@ -39,15 +39,30 @@ function pollMessagesWhenSocketInactive() {
   refreshMessageStats();
 }
 
+function openExtensionTabOnce(path) {
+  const baseUrl = chrome.runtime.getURL(path);
+  chrome.tabs.query({}, (tabs) => {
+    const existing = tabs.find((tab) => tab.url?.startsWith(baseUrl));
+    if (existing?.id) {
+      chrome.tabs.update(existing.id, { active: true });
+      if (existing.windowId !== undefined) {
+        chrome.windows.update(existing.windowId, { focused: true });
+      }
+      return;
+    }
+    chrome.tabs.create({
+      url: `${baseUrl}?installed=1`
+    });
+  });
+}
+
 chrome.runtime.onInstalled.addListener((details) => {
   ensureAlarms();
   refreshMessageBadgeFromStorage().catch(() => {});
   startMessageSocket();
   refreshMessageStats({ force: true });
   if (details.reason === "install") {
-    chrome.tabs.create({
-      url: chrome.runtime.getURL("popup.html?installed=1")
-    });
+    openExtensionTabOnce("popup.html");
   }
 });
 

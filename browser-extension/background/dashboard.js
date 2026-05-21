@@ -11,12 +11,15 @@ import {
   DASHBOARD_LOOKBACK_DAYS,
   DASHBOARD_MOMENTS_LIMIT,
   DASHBOARD_PUSH_SOURCE,
+  DEFAULT_NOTIFICATIONS_URL,
   HOMEPAGE_TODAY_METRIC_FIELDS,
   MESSAGE_STATS_REFRESH_MIN_INTERVAL_MS,
   MOMENTS_URL,
   MS_PER_DAY,
   NOTICE_COUNT_FIELDS,
   PROFILE_URL,
+  ZHIHU_AUTH_COOKIE_NAMES,
+  ZHIHU_HOME_URL,
 } from "./config.js";
 import {
   clearBrowserAuthState,
@@ -33,6 +36,8 @@ import {
 } from "./urls.js";
 
 let localMessageStatsPromise = null;
+const DEFAULT_NOTIFICATION_PAGE_LIMIT = 20;
+const DEFAULT_NOTIFICATION_MAX_PAGES = 3;
 
 function normalizeKey(value) {
   return String(value || "").trim().toLowerCase();
@@ -238,17 +243,127 @@ function sumNoticeCounts(data, keys) {
   );
 }
 
-function calcNoticeMetrics(meData) {
+function isUnreadNotification(item) {
+  return item?.is_read === false;
+}
+
+function isCommentNotification(item) {
+  const target = item?.target && typeof item.target === "object" ? item.target : {};
+  const verb = String(item?.content?.verb || "");
+  const targetUrl = String(target?.url || "");
+  return (
+    target?.type === "comment" ||
+    targetUrl.includes("/comments/") ||
+    /评论|回复/.test(verb)
+  );
+}
+
+function notificationMergeCount(item) {
+  const count = toNumber(item?.merge_count);
+  return count > 0 ? count : 1;
+}
+
+function sanitizeCommentNotification(item) {
+  const target = item?.target && typeof item.target === "object" ? item.target : {};
+  const nestedTarget =
+    target?.target && typeof target.target === "object" ? target.target : {};
+  const content = item?.content && typeof item.content === "object" ? item.content : {};
+  const contentTarget =
+    content?.target && typeof content.target === "object" ? content.target : {};
+  const extend = content?.extend && typeof content.extend === "object" ? content.extend : {};
+  const actors = Array.isArray(content?.actors) ? content.actors : [];
+
+  return {
+    id: String(item?.id || target?.id || ""),
+    is_read: item?.is_read === true,
+    merge_count: notificationMergeCount(item),
+    verb: stripHtmlText(content?.verb),
+    actor_names: actors
+      .map((actor) => stripHtmlText(actor?.name))
+      .filter(Boolean)
+      .slice(0, 3),
+    target_title: stripHtmlText(contentTarget?.text || nestedTarget?.title || ""),
+    target_url: normalizeZhihuUrl(contentTarget?.link || nestedTarget?.url),
+    comment_text: trimText(
+      stripHtmlText(extend?.text || target?.content || ""),
+      160
+    ),
+    create_time: item?.create_time || target?.created_time || "",
+    resource_type: target?.resource_type || nestedTarget?.resource_type || nestedTarget?.type || "",
+  };
+}
+
+function normalizeNotificationPageUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.startsWith("http://www.zhihu.com/")) {
+    return `https://${text.slice("http://".length)}`;
+  }
+  if (text.startsWith("//www.zhihu.com/")) {
+    return `https:${text}`;
+  }
+  if (text.startsWith("/")) {
+    return `https://www.zhihu.com${text}`;
+  }
+  return text;
+}
+
+async function fetchDefaultNotificationSummary() {
+  let url =
+    `${DEFAULT_NOTIFICATIONS_URL}?` +
+    new URLSearchParams({
+      limit: String(DEFAULT_NOTIFICATION_PAGE_LIMIT),
+    }).toString();
+  const visited = new Set();
+  let unreadCommentCount = 0;
+  const unreadCommentItems = [];
+
+  for (let page = 0; page < DEFAULT_NOTIFICATION_MAX_PAGES && url; page += 1) {
+    const normalizedUrl = normalizeNotificationPageUrl(url);
+    if (!normalizedUrl || visited.has(normalizedUrl)) {
+      break;
+    }
+    visited.add(normalizedUrl);
+
+    const result = await fetchZhihuJson(normalizedUrl).catch(() => ({ ok: false }));
+    if (!result.ok || !result.data) {
+      return { ok: false, unreadCommentCount: null };
+    }
+
+    const items = toArray(result.data);
+    const unreadItems = items.filter(isUnreadNotification);
+    for (const item of unreadItems) {
+      if (isCommentNotification(item)) {
+        unreadCommentCount += notificationMergeCount(item);
+        unreadCommentItems.push(sanitizeCommentNotification(item));
+      }
+    }
+
+    if (!unreadItems.length || result.data?.paging?.is_end) {
+      break;
+    }
+    url = normalizeNotificationPageUrl(result.data?.paging?.next);
+  }
+
+  return { ok: true, unreadCommentCount, unreadCommentItems };
+}
+
+function calcNoticeMetrics(meData, notificationSummary = null) {
   const unreadCount = sumNoticeCounts(meData, NOTICE_COUNT_FIELDS.unread);
   const followCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.follow);
   const voteCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.vote);
-  const commentCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.comment);
+  const commentCount =
+    notificationSummary?.ok && notificationSummary.unreadCommentCount !== null
+      ? notificationSummary.unreadCommentCount
+      : extractNoticeCount(meData, NOTICE_COUNT_FIELDS.comment);
   return {
     unread: unreadCount,
     follow: followCount,
     vote: voteCount,
     comment: commentCount,
-    total: unreadCount + followCount + voteCount,
+    total: unreadCount + followCount + voteCount + commentCount,
   };
 }
 
@@ -686,11 +801,51 @@ function pickName(profile) {
   return profile.name || profile.username || profile.account || profile.url_token || "未登录";
 }
 
+function hasValidZhihuProfile(profile) {
+  if (!profile || typeof profile !== "object" || profile.error) {
+    return false;
+  }
+  return Boolean(
+    profile.id ||
+      profile.uid ||
+      profile.url_token ||
+      profile.name ||
+      profile.username ||
+      profile.account ||
+      profile.member
+  );
+}
+
 function pickMemberSlug(meData) {
   if (!meData || typeof meData !== "object") {
     return "";
   }
   return String(meData.url_token || meData.member?.url_token || meData.slug || "");
+}
+
+async function hasZhihuAuthCookie() {
+  if (!chrome.cookies?.get) {
+    return false;
+  }
+
+  for (const name of ZHIHU_AUTH_COOKIE_NAMES) {
+    const hasCookie = await new Promise((resolve) => {
+      chrome.cookies.get(
+        {
+          url: ZHIHU_HOME_URL,
+          name,
+        },
+        (cookie) => {
+          resolve(!chrome.runtime.lastError && Boolean(cookie?.value));
+        }
+      );
+    });
+    if (hasCookie) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 async function fetchZhihuJson(url) {
@@ -712,6 +867,49 @@ async function fetchZhihuJson(url) {
   } catch {
     return { ok: false, status: response.status };
   }
+}
+
+export async function validateZhihuSession() {
+  const zhihuCookieDetected = await hasZhihuAuthCookie();
+  const result = await fetchZhihuJson(PROFILE_URL).catch((error) => ({
+    ok: false,
+    error: error?.message || "知乎登录态检查失败",
+  }));
+
+  if (result.ok && hasValidZhihuProfile(result.data)) {
+    return {
+      ok: true,
+      zhihuCookieDetected,
+      zhihuApiReadable: true,
+      profileName: pickName(result.data),
+    };
+  }
+
+  if (zhihuCookieDetected) {
+    return {
+      ok: true,
+      zhihuCookieDetected: true,
+      zhihuApiReadable: false,
+      warning: result.status
+        ? `知乎网页登录态存在，但接口暂时不可读：HTTP ${result.status}`
+        : result.error || "知乎网页登录态存在，但接口暂时不可读",
+    };
+  }
+
+  if (result.status === 401 || result.status === 403) {
+    return {
+      ok: false,
+      zhihuLoggedOut: true,
+      error: "知乎登录态已失效，请打开知乎重新登录",
+    };
+  }
+
+  return {
+    ok: false,
+    error: result.status
+      ? `知乎登录态检查失败：HTTP ${result.status}`
+      : result.error || "知乎登录态检查失败",
+  };
 }
 
 async function loadAnswers(memberSlug) {
@@ -762,7 +960,15 @@ export async function reportDashboardSnapshot() {
 
   const { start, end } = getDashboardDateRange();
 
-  const [meResult, homepageResult, dailyResult, aggrResult, recommendResult, momentsResult] =
+  const [
+    meResult,
+    homepageResult,
+    dailyResult,
+    aggrResult,
+    recommendResult,
+    momentsResult,
+    defaultNotificationsResult,
+  ] =
     await Promise.all([
       fetchZhihuJson(PROFILE_URL).catch(() => ({ ok: false })),
       fetchZhihuJson(CREATOR_HOME_URL).catch(() => ({ ok: false })),
@@ -784,12 +990,15 @@ export async function reportDashboardSnapshot() {
             desktop: "true"
           }).toString()
       ).catch(() => ({ ok: false })),
+      fetchDefaultNotificationSummary(),
     ]);
 
-  if (!meResult.ok || !meResult.data) {
+  if (!meResult.ok || !hasValidZhihuProfile(meResult.data)) {
     return {
       ok: false,
-      error: "读取知乎数据失败，请确认已登录知乎",
+      error: await zhihuProfileUnavailableError(
+        "读取知乎数据失败，请确认已登录知乎"
+      ),
     };
   }
 
@@ -798,7 +1007,7 @@ export async function reportDashboardSnapshot() {
   const dailyData = dailyResult.ok ? dailyResult.data : null;
   const aggrData = aggrResult.ok ? aggrResult.data : null;
   const todaySource = { homepageData, dailyData, aggrData };
-  const noticeMetrics = calcNoticeMetrics(meData);
+  const noticeMetrics = calcNoticeMetrics(meData, defaultNotificationsResult);
   const dataRefreshedAt = new Date().toISOString();
   const answers = await loadAnswers(pickMemberSlug(meData)).catch(() => []);
 
@@ -830,6 +1039,10 @@ export async function reportDashboardSnapshot() {
       vote_time: "刚刚",
       comment: noticeMetrics.comment,
       comment_time: "刚刚",
+      comment_source: defaultNotificationsResult?.ok
+        ? "notifications_v2_default"
+        : "profile_include",
+      comment_items: defaultNotificationsResult?.unreadCommentItems || [],
       total: noticeMetrics.total,
       total_time: "刚刚",
     },
@@ -858,6 +1071,13 @@ export async function reportDashboardSnapshot() {
   }
 
   return pushResult;
+}
+
+async function zhihuProfileUnavailableError(fallback) {
+  if (await hasZhihuAuthCookie()) {
+    return "知乎网页登录态存在，但接口暂时不可读，请稍后再试或刷新知乎页面";
+  }
+  return fallback;
 }
 
 export async function refreshLocalMessageStats(options = {}) {
@@ -895,17 +1115,22 @@ async function refreshLocalMessageStatsOnce({ force = false } = {}) {
     }
   }
 
-  const meResult = await fetchZhihuJson(PROFILE_URL).catch(() => ({ ok: false }));
-  if (!meResult.ok || !meResult.data) {
+  const [meResult, defaultNotificationsResult] = await Promise.all([
+    fetchZhihuJson(PROFILE_URL).catch(() => ({ ok: false })),
+    fetchDefaultNotificationSummary(),
+  ]);
+  if (!meResult.ok || !hasValidZhihuProfile(meResult.data)) {
     return {
       ok: false,
-      error: "读取知乎消息统计失败，请确认已登录知乎",
+      error: await zhihuProfileUnavailableError(
+        "读取知乎消息统计失败，请确认已登录知乎"
+      ),
     };
   }
 
   const dataRefreshedAt = new Date().toISOString();
   const meData = meResult.data;
-  const noticeMetrics = calcNoticeMetrics(meData);
+  const noticeMetrics = calcNoticeMetrics(meData, defaultNotificationsResult);
   const noticeTime = latestNoticeTime(meData);
   const overview = buildLocalMessageOverview(
     cached.dashboardOverview,

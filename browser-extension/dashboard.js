@@ -20,6 +20,8 @@ const CREATOR_RECOMMEND_URL =
 const CREATOR_ANSWER_LIST_URL =
   "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/list";
 const MOMENTS_URL = "https://www.zhihu.com/api/v3/moments";
+const DEFAULT_NOTIFICATIONS_URL =
+  "https://www.zhihu.com/api/v4/notifications/v2/default";
 const BROWSER_DASHBOARD_PUSH_URL = "/api/browser/dashboard";
 const DASHBOARD_REPORT_INTERVAL_MS = 10 * 60 * 1000;
 const DASHBOARD_PUSH_SOURCE = "browser_extension";
@@ -27,6 +29,8 @@ const DASHBOARD_LOOKBACK_DAYS = 7;
 const DASHBOARD_LIST_LIMIT = 40;
 const DASHBOARD_MOMENTS_LIMIT = 60;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const DEFAULT_NOTIFICATION_PAGE_LIMIT = 20;
+const DEFAULT_NOTIFICATION_MAX_PAGES = 3;
 
 const DEFAULT_SERVER_BASE_URL = "https://kanshan.r2049.cn";
 
@@ -311,17 +315,127 @@ function sumNoticeCounts(data, keys) {
   );
 }
 
-function calcNoticeMetrics(meData) {
+function isUnreadNotification(item) {
+  return item?.is_read === false;
+}
+
+function isCommentNotification(item) {
+  const target = item?.target && typeof item.target === "object" ? item.target : {};
+  const verb = String(item?.content?.verb || "");
+  const targetUrl = String(target?.url || "");
+  return (
+    target?.type === "comment" ||
+    targetUrl.includes("/comments/") ||
+    /评论|回复/.test(verb)
+  );
+}
+
+function notificationMergeCount(item) {
+  const count = Math.floor(toNumber(item?.merge_count));
+  return count > 0 ? count : 1;
+}
+
+function sanitizeCommentNotification(item) {
+  const target = item?.target && typeof item.target === "object" ? item.target : {};
+  const nestedTarget =
+    target?.target && typeof target.target === "object" ? target.target : {};
+  const content = item?.content && typeof item.content === "object" ? item.content : {};
+  const contentTarget =
+    content?.target && typeof content.target === "object" ? content.target : {};
+  const extend = content?.extend && typeof content.extend === "object" ? content.extend : {};
+  const actors = Array.isArray(content?.actors) ? content.actors : [];
+
+  return {
+    id: String(item?.id || target?.id || ""),
+    is_read: item?.is_read === true,
+    merge_count: notificationMergeCount(item),
+    verb: stripHtmlText(content?.verb),
+    actor_names: actors
+      .map((actor) => stripHtmlText(actor?.name))
+      .filter(Boolean)
+      .slice(0, 3),
+    target_title: stripHtmlText(contentTarget?.text || nestedTarget?.title || ""),
+    target_url: normalizeZhihuUrl(contentTarget?.link || nestedTarget?.url),
+    comment_text: trimText(
+      stripHtmlText(extend?.text || target?.content || ""),
+      160
+    ),
+    create_time: item?.create_time || target?.created_time || "",
+    resource_type: target?.resource_type || nestedTarget?.resource_type || nestedTarget?.type || "",
+  };
+}
+
+function normalizeNotificationPageUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "";
+  }
+  if (text.startsWith("http://www.zhihu.com/")) {
+    return `https://${text.slice("http://".length)}`;
+  }
+  if (text.startsWith("//www.zhihu.com/")) {
+    return `https:${text}`;
+  }
+  if (text.startsWith("/")) {
+    return `https://www.zhihu.com${text}`;
+  }
+  return text;
+}
+
+async function fetchDefaultNotificationSummary() {
+  let url =
+    `${DEFAULT_NOTIFICATIONS_URL}?` +
+    new URLSearchParams({
+      limit: String(DEFAULT_NOTIFICATION_PAGE_LIMIT),
+    }).toString();
+  const visited = new Set();
+  let unreadCommentCount = 0;
+  const unreadCommentItems = [];
+
+  for (let page = 0; page < DEFAULT_NOTIFICATION_MAX_PAGES && url; page += 1) {
+    const normalizedUrl = normalizeNotificationPageUrl(url);
+    if (!normalizedUrl || visited.has(normalizedUrl)) {
+      break;
+    }
+    visited.add(normalizedUrl);
+
+    const result = await fetchZhihuJson(normalizedUrl).catch(() => ({ ok: false }));
+    if (!result.ok || !result.data) {
+      return { ok: false, unreadCommentCount: null };
+    }
+
+    const items = toArray(result.data);
+    const unreadItems = items.filter(isUnreadNotification);
+    for (const item of unreadItems) {
+      if (isCommentNotification(item)) {
+        unreadCommentCount += notificationMergeCount(item);
+        unreadCommentItems.push(sanitizeCommentNotification(item));
+      }
+    }
+
+    if (!unreadItems.length || result.data?.paging?.is_end) {
+      break;
+    }
+    url = normalizeNotificationPageUrl(result.data?.paging?.next);
+  }
+
+  return { ok: true, unreadCommentCount, unreadCommentItems };
+}
+
+function calcNoticeMetrics(meData, notificationSummary = null) {
   const unreadCount = sumNoticeCounts(meData, NOTICE_COUNT_FIELDS.unread);
   const followCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.follow);
   const voteCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.vote);
-  const commentCount = extractNoticeCount(meData, NOTICE_COUNT_FIELDS.comment);
+  const commentCount =
+    notificationSummary?.ok && notificationSummary.unreadCommentCount !== null
+      ? notificationSummary.unreadCommentCount
+      : extractNoticeCount(meData, NOTICE_COUNT_FIELDS.comment);
   return {
     unread: unreadCount,
     follow: followCount,
     vote: voteCount,
     comment: commentCount,
-    total: unreadCount + followCount + voteCount,
+    total: unreadCount + followCount + voteCount + commentCount,
   };
 }
 
@@ -1321,7 +1435,15 @@ async function loadDashboardData(options = {}) {
   try {
     const { start, end } = getDashboardDateRange();
 
-    const [meResult, homepageResult, dailyResult, aggrResult, recommendResult, momentsResult] =
+    const [
+      meResult,
+      homepageResult,
+      dailyResult,
+      aggrResult,
+      recommendResult,
+      momentsResult,
+      defaultNotificationsResult,
+    ] =
       await Promise.all([
         fetchZhihuJson(PROFILE_URL).catch((error) => ({
           ok: false,
@@ -1360,7 +1482,8 @@ async function loadDashboardData(options = {}) {
         ).catch((error) => ({
           ok: false,
           message: `网络异常：${error?.message || "请稍后重试"}`
-        }))
+        })),
+        fetchDefaultNotificationSummary()
       ]);
 
     if (!meResult.ok) {
@@ -1395,7 +1518,7 @@ async function loadDashboardData(options = {}) {
       // ignore
     }
 
-    const noticeMetricsData = calcNoticeMetrics(meData);
+    const noticeMetricsData = calcNoticeMetrics(meData, defaultNotificationsResult);
     const unread = noticeMetricsData.unread;
     const followCount = noticeMetricsData.follow;
     const voteCount = noticeMetricsData.vote;
@@ -1446,6 +1569,10 @@ async function loadDashboardData(options = {}) {
       vote_time: noticeTime,
       comment: commentCount,
       comment_time: noticeTime,
+      comment_source: defaultNotificationsResult?.ok
+        ? "notifications_v2_default"
+        : "profile_include",
+      comment_items: defaultNotificationsResult?.unreadCommentItems || [],
       total: totalNoticeCount,
       total_time: noticeTime
     };

@@ -1,5 +1,7 @@
 import {
   BROWSER_MESSAGE_BATCH_LIMIT,
+  BROWSER_MESSAGE_OPEN_LIMIT,
+  BROWSER_MESSAGE_OPEN_WINDOW_MS,
   BROWSER_MESSAGE_WS_PATH,
   BROWSER_MESSAGE_WS_PING_MS,
   BROWSER_MESSAGE_WS_RECONNECT_MS,
@@ -22,6 +24,9 @@ let messageSocketToken = "";
 let messageSocketPingTimer = null;
 let messageSocketReconnectTimer = null;
 let messageSocketConnecting = false;
+let openedMessageWindowStartedAt = 0;
+let openedMessageCount = 0;
+const openedMessageIds = new Set();
 
 export async function pollMessages() {
   if (pollMessagesPromise) {
@@ -86,15 +91,47 @@ async function processBrowserMessages(items) {
   let lastMessageId = state.lastMessageId || 0;
   for (const message of items || []) {
     lastMessageId = Math.max(lastMessageId, message.id || 0);
-    await chrome.tabs.create({
-      url: resolveActionUrl(message),
-      active: true
-    });
+    if (shouldOpenActionTab(message)) {
+      await chrome.tabs.create({
+        url: resolveActionUrl(message),
+        active: true
+      });
+    }
   }
   if (lastMessageId !== state.lastMessageId) {
     await saveState({ lastMessageId });
   }
   return lastMessageId;
+}
+
+function shouldOpenActionTab(message) {
+  const messageId = Number(message?.id) || 0;
+  if (messageId > 0) {
+    if (openedMessageIds.has(messageId)) {
+      return false;
+    }
+    openedMessageIds.add(messageId);
+    if (openedMessageIds.size > 100) {
+      openedMessageIds.clear();
+      openedMessageIds.add(messageId);
+    }
+  }
+
+  const now = Date.now();
+  if (
+    !openedMessageWindowStartedAt ||
+    now - openedMessageWindowStartedAt > BROWSER_MESSAGE_OPEN_WINDOW_MS
+  ) {
+    openedMessageWindowStartedAt = now;
+    openedMessageCount = 0;
+  }
+
+  if (openedMessageCount >= BROWSER_MESSAGE_OPEN_LIMIT) {
+    return false;
+  }
+
+  openedMessageCount += 1;
+  return true;
 }
 
 async function handleMessageSocketPayload(raw) {
