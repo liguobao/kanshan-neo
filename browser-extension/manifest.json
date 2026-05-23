@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "赛博刘看山",
-  "version": "0.1.10",
+  "version": "0.1.15",
   "description": "赛博刘看山 - 你的下一个电子伴侣为什么不可以是看山呢？",
   "action": {
     "default_title": "赛博刘看山",

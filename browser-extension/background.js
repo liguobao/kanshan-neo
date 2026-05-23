@@ -145,7 +145,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === "report-dashboard-now") {
-    reportDashboardSnapshot()
+    const requireComplete = Boolean(message?.requireComplete);
+    reportDashboardSnapshot({ requireComplete })
       .then((result) => {
         if (result?.ok) {
           sendResponse({ ok: true, data: result });

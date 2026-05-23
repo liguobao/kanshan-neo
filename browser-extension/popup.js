@@ -1,7 +1,6 @@
 const loginForm = document.getElementById("login-form");
 const ZHIHU_HOME_URL = "https://www.zhihu.com/";
 const CREATOR_ANALYTICS_URL = "https://www.zhihu.com/creator/analytics/work/all";
-const ZHIHU_NOTIFICATIONS_URL = "https://www.zhihu.com/notifications";
 const statusEl = document.getElementById("status");
 const versionEl = document.getElementById("version");
 const lastReportEl = document.getElementById("last-report");
@@ -19,9 +18,9 @@ const metricEls = {
     value: document.getElementById("metric-comment"),
     time: document.getElementById("metric-comment-time"),
   },
-  message: {
-    value: document.getElementById("metric-message"),
-    time: document.getElementById("metric-message-time"),
+  favorite: {
+    value: document.getElementById("metric-favorite"),
+    time: document.getElementById("metric-favorite-time"),
   },
 };
 const loginEmailEl = document.getElementById("login-email");
@@ -31,7 +30,7 @@ const pollNowEl = document.getElementById("poll-now");
 const metricReadLinkEl = document.getElementById("metric-read-link");
 const metricAgreeLinkEl = document.getElementById("metric-agree-link");
 const metricCommentLinkEl = document.getElementById("metric-comment-link");
-const metricMessageLinkEl = document.getElementById("metric-message-link");
+const metricFavoriteLinkEl = document.getElementById("metric-favorite-link");
 const reportDashboardEl = document.getElementById("report-dashboard");
 const openDashboardEl = document.getElementById("open-dashboard");
 const logoutBrowserEl = document.getElementById("logout-browser");
@@ -40,6 +39,16 @@ const openZhihuLinkEl = document.getElementById("open-zhihu-link");
 const toolsSectionEl = document.getElementById("tools-section");
 const DEFAULT_SERVER_BASE_URL = "https://kanshan.r2049.cn";
 let serverBaseUrl = DEFAULT_SERVER_BASE_URL;
+
+function dashboardUrl(params = {}) {
+  const url = new URL(chrome.runtime.getURL("dashboard.html"));
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) {
+      url.searchParams.set(key, String(value));
+    }
+  }
+  return url.toString();
+}
 
 function renderVersion() {
   const manifest = chrome.runtime.getManifest();
@@ -92,7 +101,7 @@ function renderDashboardOverview(overview) {
   renderMetric("read", today.read, today.read_time);
   renderMetric("agree", today.agree, today.agree_time);
   renderMetric("comment", today.comment, today.comment_time);
-  renderMetric("message", today.message, today.message_time);
+  renderMetric("favorite", today.favorite, today.favorite_time);
 }
 
 function renderConnectionState(state, feedbackText) {
@@ -107,14 +116,13 @@ function renderConnectionState(state, feedbackText) {
   setFeedback(feedbackText);
 }
 
-function requestMessageStatsRefresh() {
-  chrome.runtime.sendMessage({ type: "refresh-message-stats-now" }, (reply) => {
-    if (!reply || !reply.ok) {
-      return;
-    }
-    chrome.storage.local.get({ dashboardOverview: null }, (state) => {
-      renderDashboardOverview(state.dashboardOverview);
-    });
+function openDashboardForRefresh({ push = false } = {}) {
+  setFeedback(push ? "已打开数据看板刷新并上报" : "已打开数据看板刷新");
+  chrome.tabs.create({
+    url: dashboardUrl({
+      refresh: 1,
+      push: push ? 1 : undefined,
+    }),
   });
 }
 
@@ -187,9 +195,6 @@ async function loadState(statusText, options = {}) {
   renderConnectionState(state, statusText);
   if (state.browserToken) {
     validateCurrentSession();
-    if (options.refreshMessageStats !== false) {
-      requestMessageStatsRefresh();
-    }
   }
 }
 
@@ -200,15 +205,15 @@ metricReadLinkEl?.addEventListener("click", () => {
 });
 
 metricAgreeLinkEl?.addEventListener("click", () => {
-  chrome.tabs.create({ url: ZHIHU_NOTIFICATIONS_URL });
+  chrome.tabs.create({ url: CREATOR_ANALYTICS_URL });
 });
 
 metricCommentLinkEl?.addEventListener("click", () => {
-  chrome.tabs.create({ url: ZHIHU_NOTIFICATIONS_URL });
+  chrome.tabs.create({ url: CREATOR_ANALYTICS_URL });
 });
 
-metricMessageLinkEl?.addEventListener("click", () => {
-  chrome.tabs.create({ url: ZHIHU_NOTIFICATIONS_URL });
+metricFavoriteLinkEl?.addEventListener("click", () => {
+  chrome.tabs.create({ url: CREATOR_ANALYTICS_URL });
 });
 
 openZhihuLinkEl?.addEventListener("click", (event) => {
@@ -248,7 +253,7 @@ loginForm.addEventListener("submit", async (event) => {
         },
         "登录成功"
       );
-      requestMessageStatsRefresh();
+      loadState("登录成功", { refreshCreatorDashboard: false });
     }
   );
 });
@@ -261,32 +266,16 @@ serverHomeLinkEl?.addEventListener("click", (event) => {
 });
 
 pollNowEl.addEventListener("click", () => {
-  setFeedback("检查中...");
-  chrome.runtime.sendMessage({ type: "poll-now" }, (reply) => {
-    if (!reply || !reply.ok) {
-      setFeedback(reply?.error || "检查失败");
-      return;
-    }
-    loadState("检查完成", { refreshMessageStats: false });
-  });
+  openDashboardForRefresh();
 });
 
 reportDashboardEl?.addEventListener("click", () => {
-  setFeedback("上报中...");
-  reportDashboardEl.disabled = true;
-  chrome.runtime.sendMessage({ type: "report-dashboard-now" }, (reply) => {
-    reportDashboardEl.disabled = false;
-    if (!reply || !reply.ok) {
-      loadState(reply?.error || "上报失败");
-      return;
-    }
-    loadState("上报成功：已推送到服务端");
-  });
+  openDashboardForRefresh({ push: true });
 });
 
 openDashboardEl?.addEventListener("click", () => {
   chrome.tabs.create({
-    url: chrome.runtime.getURL("dashboard.html")
+    url: dashboardUrl()
   });
 });
 
@@ -323,7 +312,7 @@ chrome.storage?.onChanged?.addListener((changes, areaName) => {
     const oldToken = changes.browserToken.oldValue || "";
     const newToken = changes.browserToken.newValue || "";
     if (oldToken && !newToken) {
-      loadState("登录已失效，请重新登录", { refreshMessageStats: false });
+      loadState("登录已失效，请重新登录", { refreshCreatorDashboard: false });
     }
   }
 });

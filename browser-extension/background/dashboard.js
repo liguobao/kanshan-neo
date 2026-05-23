@@ -38,6 +38,14 @@ import {
 let localMessageStatsPromise = null;
 const DEFAULT_NOTIFICATION_PAGE_LIMIT = 20;
 const DEFAULT_NOTIFICATION_MAX_PAGES = 3;
+const TODAY_CONTENT_TYPES = ["answer", "pin"];
+const LEGACY_ANSWER_CONTENT_TYPES = ["answer"];
+const CREATOR_CONTENT_METRIC_FIELDS = {
+  read: ["read_count", "reads", "view_count", "views_count", "view", "views", "pv", "show"],
+  agree: ["vote_up_count", "voteup_count", "upvote_count", "agree_count", "like_count"],
+  comment: ["comment_count", "comments_count", "comment_num", "comment"],
+  favorite: ["collect_count", "collection_count", "favorite_count", "favorites_count", "collect"],
+};
 
 function normalizeKey(value) {
   return String(value || "").trim().toLowerCase();
@@ -146,6 +154,47 @@ function hasRecentDashboardTimestamp(item) {
   return !timestamp || isWithinDashboardWindow(timestamp);
 }
 
+function isSameLocalDate(value, referenceDate = new Date()) {
+  const date = parseDateValue(value);
+  return (
+    !!date &&
+    date.getFullYear() === referenceDate.getFullYear() &&
+    date.getMonth() === referenceDate.getMonth() &&
+    date.getDate() === referenceDate.getDate()
+  );
+}
+
+function countItemsCreatedToday(items, referenceDate = new Date()) {
+  if (!Array.isArray(items)) {
+    return 0;
+  }
+  const seen = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const createdAt = pickTimestampValue(item, [
+      "created_at",
+      "created_time",
+      "created",
+      "published_at",
+      "publish_time"
+    ]);
+    if (!createdAt || !isSameLocalDate(createdAt, referenceDate)) {
+      continue;
+    }
+    const identity = String(
+      item.id ||
+      item.answer_id ||
+      item.url ||
+      item.answer_url ||
+      createdAt
+    );
+    seen.add(identity);
+  }
+  return seen.size;
+}
+
 function toNumber(value) {
   const parsed = parseNumericValue(value);
   return parsed === null ? 0 : Math.max(0, Math.floor(parsed));
@@ -221,14 +270,76 @@ function findMetricFromPayloads(payloads, aliases) {
   return 0;
 }
 
+function findFirstMetricFromPayloads(payloads, aliases) {
+  for (const payload of payloads) {
+    const value = findMetricValue(payload, aliases);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function findTodayDatedMetric(payload, aliases, referenceDate = new Date()) {
+  let best = null;
+  const visit = (node) => {
+    if (best !== null || node === null || node === undefined || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+        if (best !== null) {
+          return;
+        }
+      }
+      return;
+    }
+    const timestamp = pickTimestampValue(node, [
+      ...DASHBOARD_ITEM_TIME_FIELDS,
+      "date",
+      "day",
+      "dt",
+      "stats_date",
+      "stat_date"
+    ]);
+    if (timestamp && isSameLocalDate(timestamp, referenceDate)) {
+      const value = findMetricValue(node, aliases);
+      if (value !== null) {
+        best = value;
+        return;
+      }
+    }
+    for (const value of Object.values(node)) {
+      visit(value);
+      if (best !== null) {
+        return;
+      }
+    }
+  };
+  visit(payload);
+  return best;
+}
+
 function findTodayMetric({ homepageData, dailyData, aggrData }, metric) {
-  return findMetricFromPayloads(
+  const explicitTodayValue = findFirstMetricFromPayloads(
     [homepageData, dailyData, aggrData],
-    [
-      ...(HOMEPAGE_TODAY_METRIC_FIELDS[metric] || []),
-      ...(CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []),
-    ]
+    HOMEPAGE_TODAY_METRIC_FIELDS[metric] || []
   );
+  if (explicitTodayValue !== null) {
+    return explicitTodayValue;
+  }
+  const aggrTodayValue = findMetricValue(
+    aggrData?.today,
+    CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []
+  );
+  if (aggrTodayValue !== null) {
+    return aggrTodayValue;
+  }
+  return findTodayDatedMetric(
+    dailyData,
+    CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []
+  ) ?? 0;
 }
 
 function extractNoticeCount(data, keys) {
@@ -380,7 +491,11 @@ function latestNoticeTime(meData) {
 }
 
 function buildLocalMessageOverview(previousOverview, noticeMetrics, noticeTime, capturedAt) {
-  const previousToday = isPlainObject(previousOverview?.today)
+  const capturedDate = parseDateValue(capturedAt) || new Date();
+  const previousToday = (
+    isSameLocalDate(previousOverview?.captured_at, capturedDate) &&
+    isPlainObject(previousOverview?.today)
+  )
     ? previousOverview.today
     : {};
   const previousNotifications = isPlainObject(previousOverview?.notifications)
@@ -389,10 +504,6 @@ function buildLocalMessageOverview(previousOverview, noticeMetrics, noticeTime, 
 
   const today = {
     ...previousToday,
-    agree: noticeMetrics.vote,
-    agree_time: noticeTime,
-    comment: noticeMetrics.comment,
-    comment_time: noticeTime,
     message: noticeMetrics.unread,
     message_time: noticeTime,
   };
@@ -787,6 +898,224 @@ function sanitizeAnswers(items) {
     .filter((item) => item.question_title);
 }
 
+function creationDayTimestampRange(referenceDate = new Date()) {
+  const start = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const end = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    23,
+    59,
+    59,
+    999
+  );
+  return {
+    start: Math.floor(start.getTime() / 1000),
+    end: Math.floor(end.getTime() / 1000),
+  };
+}
+
+function sanitizeCreations(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const data = item?.data && typeof item.data === "object" ? item.data : {};
+      const reaction = item?.reaction && typeof item.reaction === "object" ? item.reaction : {};
+      const type = String(item?.type || data?.type || "").trim();
+      const id = String(data?.id || item?.id || data?.url_token || "").trim();
+      const questionId = String(data?.question_id || "").trim();
+      const createdAt =
+        data?.created_time ||
+        data?.created_at ||
+        data?.created ||
+        item?.created_time ||
+        item?.created_at ||
+        item?.created ||
+        "";
+      const updatedAt =
+        data?.updated_time ||
+        data?.updated_at ||
+        item?.updated_time ||
+        item?.updated_at ||
+        "";
+      return {
+        id: id || `${type}:${createdAt}`,
+        type,
+        title: firstPresentText([data?.title, item?.title]),
+        content: trimText(
+          firstPresentText([
+            data?.excerpt,
+            data?.summary,
+            Array.isArray(data?.content)
+              ? data.content.map((part) => part?.own_text || part?.content || "").join(" ")
+              : data?.content,
+          ]),
+          220
+        ),
+        url:
+          normalizeZhihuUrl(data?.url) ||
+          (type === "answer" && id && questionId
+            ? `https://www.zhihu.com/question/${questionId}/answer/${id}`
+            : "") ||
+          (type === "answer" && id ? `https://www.zhihu.com/answer/${id}` : "") ||
+          (type === "pin" && id ? `https://www.zhihu.com/pin/${id}` : ""),
+        created_at: createdAt,
+        updated_at: updatedAt,
+        read_count: toNumber(reaction?.read_count || reaction?.view_count || 0),
+        voteup_count: toNumber(reaction?.vote_up_count || reaction?.voteup_count || 0),
+        like_count: toNumber(reaction?.like_count || 0),
+        comment_count: toNumber(reaction?.comment_count || 0),
+        collect_count: toNumber(reaction?.collect_count || 0),
+      };
+    })
+    .filter((item) => item.type && item.created_at);
+}
+
+async function loadCreationsResult(referenceDate = new Date()) {
+  const { start, end } = creationDayTimestampRange(referenceDate);
+  const limit = 50;
+  const items = [];
+  let loaded = false;
+  for (let page = 0; page < 5; page += 1) {
+    const offset = page * limit;
+    const url =
+      "https://www.zhihu.com/api/v4/creators/creations/v2/all?" +
+      new URLSearchParams({
+        start: String(start),
+        end: String(end),
+        limit: String(limit),
+        offset: String(offset),
+        need_co_creation: "1",
+        sort_type: "created",
+      }).toString();
+    const result = await fetchZhihuJson(url);
+    if (!result.ok || !result.data) {
+      break;
+    }
+    loaded = true;
+    items.push(...toArray(result.data));
+    if (result.data?.paging?.is_end) {
+      break;
+    }
+  }
+  return {
+    ok: loaded,
+    items: sanitizeCreations(items),
+  };
+}
+
+function countCreationsCreatedToday(creations, type, referenceDate = new Date()) {
+  if (!Array.isArray(creations)) {
+    return 0;
+  }
+  return countItemsCreatedToday(
+    creations.filter((item) => item.type === type),
+    referenceDate
+  );
+}
+
+function contentItemType(item, fallback = "") {
+  if (!item || typeof item !== "object") {
+    return fallback;
+  }
+  const data = item?.data && typeof item.data === "object" ? item.data : {};
+  return String(
+    item?.type ||
+      item?.content_type ||
+      item?.item_type ||
+      data?.type ||
+      data?.content_type ||
+      fallback
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function contentMetricValue(item, fields) {
+  if (!item || typeof item !== "object") {
+    return 0;
+  }
+  const data = item?.data && typeof item.data === "object" ? item.data : {};
+  const reaction = item?.reaction && typeof item.reaction === "object" ? item.reaction : {};
+  const answer = item?.answer && typeof item.answer === "object" ? item.answer : {};
+  for (const source of [item, reaction, data, answer]) {
+    for (const field of fields) {
+      const parsed = parseNumericValue(source?.[field]);
+      if (parsed !== null && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+  }
+  return 0;
+}
+
+function sumContentMetricCreatedToday(
+  items,
+  fields,
+  contentTypes,
+  referenceDate = new Date(),
+  fallbackType = ""
+) {
+  if (!Array.isArray(items)) {
+    return 0;
+  }
+  const allowedTypes = new Set(contentTypes);
+  let total = 0;
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (!allowedTypes.has(contentItemType(item, fallbackType))) {
+      continue;
+    }
+    const createdAt = pickTimestampValue(item, [
+      "created_at",
+      "created_time",
+      "created",
+      "published_at",
+      "publish_time",
+    ]);
+    if (!createdAt || !isSameLocalDate(createdAt, referenceDate)) {
+      continue;
+    }
+    total += contentMetricValue(item, fields);
+  }
+  return total;
+}
+
+function contentMetricHighWater(creations, answers, metric, referenceDate = new Date()) {
+  const fields = CREATOR_CONTENT_METRIC_FIELDS[metric] || [];
+  if (!fields.length) {
+    return 0;
+  }
+  return Math.max(
+    sumContentMetricCreatedToday(
+      creations,
+      fields,
+      TODAY_CONTENT_TYPES,
+      referenceDate
+    ),
+    sumContentMetricCreatedToday(
+      answers,
+      fields,
+      LEGACY_ANSWER_CONTENT_TYPES,
+      referenceDate,
+      "answer"
+    )
+  );
+}
+
 function pickAvatar(profile) {
   if (!profile || typeof profile !== "object") {
     return "liukanshan-avatar.jpg";
@@ -912,7 +1241,7 @@ export async function validateZhihuSession() {
   };
 }
 
-async function loadAnswers(memberSlug) {
+async function loadAnswersResult(memberSlug) {
   const contentListUrl =
     `${CREATOR_ANSWER_LIST_URL}?` +
     new URLSearchParams({
@@ -921,16 +1250,24 @@ async function loadAnswers(memberSlug) {
       limit: String(DASHBOARD_LIST_LIMIT),
     }).toString();
 
+  let primaryLoaded = false;
   const primaryResult = await fetchZhihuJson(contentListUrl);
   if (primaryResult.ok) {
+    primaryLoaded = true;
     const source = toArray(primaryResult.data);
     if (source.length > 0) {
-      return sanitizeAnswers(source);
+      return {
+        ok: true,
+        items: sanitizeAnswers(source),
+      };
     }
   }
 
   if (!memberSlug) {
-    return [];
+    return {
+      ok: primaryLoaded,
+      items: [],
+    };
   }
 
   const fallbackUrl =
@@ -943,13 +1280,56 @@ async function loadAnswers(memberSlug) {
 
   const fallbackResult = await fetchZhihuJson(fallbackUrl);
   if (!fallbackResult.ok || !fallbackResult.data) {
-    return [];
+    return {
+      ok: primaryLoaded,
+      items: [],
+    };
   }
 
-  return sanitizeAnswers(toArray(fallbackResult.data));
+  return {
+    ok: true,
+    items: sanitizeAnswers(toArray(fallbackResult.data)),
+  };
 }
 
-export async function reportDashboardSnapshot() {
+function collectMissingCreatorDashboardSources({
+  homepageResult,
+  dailyResult,
+  aggrResult,
+  recommendResult,
+  momentsResult,
+  answersResult,
+  creationsResult,
+}) {
+  const missing = [];
+  if (!homepageResult?.ok) {
+    missing.push("creator_homepage");
+  }
+  if (!dailyResult?.ok) {
+    missing.push("creator_daily");
+  }
+  if (!aggrResult?.ok) {
+    missing.push("creator_aggr");
+  }
+  if (recommendResult && !recommendResult.ok) {
+    missing.push("creator_recommend");
+  }
+  if (momentsResult && !momentsResult.ok) {
+    missing.push("moments");
+  }
+  if (answersResult && !answersResult.ok) {
+    missing.push("creator_answers");
+  }
+  if (creationsResult && !creationsResult.ok) {
+    missing.push("creator_creations");
+  }
+  return missing;
+}
+
+export async function reportDashboardSnapshot({
+  requireComplete = false,
+  requireCompleteData = false,
+} = {}) {
   const state = await getState();
   if (!state.browserToken) {
     return {
@@ -1002,6 +1382,29 @@ export async function reportDashboardSnapshot() {
     };
   }
 
+  const missingRequiredSources = collectMissingCreatorDashboardSources({
+    homepageResult,
+    dailyResult,
+    aggrResult,
+    recommendResult,
+    momentsResult,
+  });
+
+  if (!homepageResult.ok && !dailyResult.ok && !aggrResult.ok) {
+    return {
+      ok: false,
+      skipped: true,
+      error: "创作源数据不可读，已跳过本次后台上报",
+    };
+  }
+
+  if ((requireComplete || requireCompleteData) && missingRequiredSources.length > 0) {
+    return {
+      ok: false,
+      error: `创作源数据未完整返回：${missingRequiredSources.join(", ")}`,
+    };
+  }
+
   const meData = meResult.data;
   const homepageData = homepageResult.ok ? homepageResult.data : null;
   const dailyData = dailyResult.ok ? dailyResult.data : null;
@@ -1009,7 +1412,55 @@ export async function reportDashboardSnapshot() {
   const todaySource = { homepageData, dailyData, aggrData };
   const noticeMetrics = calcNoticeMetrics(meData, defaultNotificationsResult);
   const dataRefreshedAt = new Date().toISOString();
-  const answers = await loadAnswers(pickMemberSlug(meData)).catch(() => []);
+  const [answersResult, creationsResult] = await Promise.all([
+    loadAnswersResult(pickMemberSlug(meData)).catch(() => ({
+      ok: false,
+      items: [],
+    })),
+    loadCreationsResult().catch(() => ({
+      ok: false,
+      items: [],
+    })),
+  ]);
+  const missingRequiredListSources = collectMissingCreatorDashboardSources({
+    answersResult,
+    creationsResult,
+  });
+
+  if ((requireComplete || requireCompleteData) && missingRequiredListSources.length > 0) {
+    return {
+      ok: false,
+      error: `创作源数据未完整返回：${missingRequiredListSources.join(", ")}`,
+    };
+  }
+
+  const answers = answersResult.items || [];
+  const creations = creationsResult.items || [];
+  const readToday = Math.max(
+    findTodayMetric(todaySource, "read"),
+    contentMetricHighWater(creations, answers, "read")
+  );
+  const agreeToday = Math.max(
+    findTodayMetric(todaySource, "agree"),
+    contentMetricHighWater(creations, answers, "agree")
+  );
+  const commentToday = Math.max(
+    findTodayMetric(todaySource, "comment"),
+    contentMetricHighWater(creations, answers, "comment")
+  );
+  const favoriteToday = Math.max(
+    findTodayMetric(todaySource, "favorite"),
+    contentMetricHighWater(creations, answers, "favorite")
+  );
+  const answerToday = Math.max(
+    findTodayMetric(todaySource, "answer"),
+    countCreationsCreatedToday(creations, "answer"),
+    countItemsCreatedToday(answers)
+  );
+  const thoughtToday = Math.max(
+    findTodayMetric(todaySource, "thought"),
+    countCreationsCreatedToday(creations, "pin")
+  );
 
   const payload = {
     source: DASHBOARD_PUSH_SOURCE,
@@ -1021,12 +1472,18 @@ export async function reportDashboardSnapshot() {
       data_refreshed_at: dataRefreshedAt,
     },
     today: {
-      read: findTodayMetric(todaySource, "read"),
+      read: readToday,
       read_time: "今天",
-      agree: noticeMetrics.vote,
-      agree_time: "刚刚",
-      comment: findTodayMetric(todaySource, "comment"),
+      agree: agreeToday,
+      agree_time: "今天",
+      comment: commentToday,
       comment_time: "今天",
+      favorite: favoriteToday,
+      favorite_time: "今天",
+      today_answer_count: answerToday,
+      today_answer_time: "今天",
+      today_thought_count: thoughtToday,
+      today_thought_time: "今天",
       message: noticeMetrics.unread,
       message_time: "刚刚",
     },
@@ -1051,6 +1508,7 @@ export async function reportDashboardSnapshot() {
     ),
     recommended_answers: sanitizeRecommendedAnswers(toArray(momentsResult?.data || [])),
     answers,
+    creations,
   };
 
   const pushResult = await pushDashboardPayload(state, payload);

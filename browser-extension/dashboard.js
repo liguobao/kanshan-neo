@@ -22,15 +22,23 @@ const CREATOR_ANSWER_LIST_URL =
 const MOMENTS_URL = "https://www.zhihu.com/api/v3/moments";
 const DEFAULT_NOTIFICATIONS_URL =
   "https://www.zhihu.com/api/v4/notifications/v2/default";
-const BROWSER_DASHBOARD_PUSH_URL = "/api/browser/dashboard";
+const BROWSER_DASHBOARD_PUSH_URL = "/api/browser/dashboard/v2";
 const DASHBOARD_REPORT_INTERVAL_MS = 10 * 60 * 1000;
 const DASHBOARD_PUSH_SOURCE = "browser_extension";
-const DASHBOARD_LOOKBACK_DAYS = 7;
+const DASHBOARD_LOOKBACK_DAYS = 1;
 const DASHBOARD_LIST_LIMIT = 40;
 const DASHBOARD_MOMENTS_LIMIT = 60;
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const DEFAULT_NOTIFICATION_PAGE_LIMIT = 20;
 const DEFAULT_NOTIFICATION_MAX_PAGES = 3;
+const TODAY_CONTENT_TYPES = ["answer", "pin"];
+const LEGACY_ANSWER_CONTENT_TYPES = ["answer"];
+const CREATOR_CONTENT_METRIC_FIELDS = {
+  read: ["read_count", "reads", "view_count", "views_count", "view", "views", "pv", "show"],
+  agree: ["vote_up_count", "voteup_count", "upvote_count", "agree_count", "like_count"],
+  comment: ["comment_count", "comments_count", "comment_num", "comment"],
+  favorite: ["collect_count", "collection_count", "favorite_count", "favorites_count", "collect"],
+};
 
 const DEFAULT_SERVER_BASE_URL = "https://kanshan.r2049.cn";
 
@@ -47,10 +55,12 @@ const profileAuthTimeEl = document.getElementById("profile-auth-time");
 const todayReadEl = document.getElementById("today-read");
 const todayAgreeEl = document.getElementById("today-agree");
 const todayCommentEl = document.getElementById("today-comment");
+const todayFavoriteEl = document.getElementById("today-favorite");
 const todayMessageEl = document.getElementById("today-message");
 const todayReadTimeEl = document.getElementById("today-read-time");
 const todayAgreeTimeEl = document.getElementById("today-agree-time");
 const todayCommentTimeEl = document.getElementById("today-comment-time");
+const todayFavoriteTimeEl = document.getElementById("today-favorite-time");
 const todayMessageTimeEl = document.getElementById("today-message-time");
 
 const recommendListEl = document.getElementById("recommend-list");
@@ -76,12 +86,24 @@ const HOMEPAGE_TODAY_METRIC_FIELDS = {
   read: ["today_read_count"],
   agree: ["today_upvoted_count", "today_incr_upvoted_count"],
   comment: ["today_comment_count", "today_comment_num", "today_comments_count"],
+  favorite: ["today_favorite_count", "today_favorites_count", "today_collect_count"],
+  answer: ["today_answer_count", "today_answers_count"],
+  thought: ["today_thought_count", "today_thoughts_count", "today_pin_count"],
 };
 
 const CREATOR_ANALYSIS_METRIC_FIELDS = {
   read: ["read_count", "reads", "view_count", "views_count", "pv", "pv_count"],
-  agree: ["voteup_count", "agree_count", "like_count", "upvote_count", "vote_count"],
-  comment: ["comment_count", "comments_count", "comment_num"],
+  agree: [
+    "new_upvote",
+    "new_incr_upvote_num",
+    "incr_upvote_num",
+    "upvote",
+    "voteup_count",
+    "agree_count",
+    "upvote_count",
+  ],
+  comment: ["comment", "comment_count", "comments_count", "comment_num"],
+  favorite: ["collect", "favorite_count", "favorites_count", "collect_count", "collection_count"],
 };
 
 const DASHBOARD_ITEM_TIME_FIELDS = [
@@ -268,6 +290,47 @@ function isWithinDashboardWindow(value) {
 function hasRecentDashboardTimestamp(item) {
   const timestamp = pickTimestampValue(item);
   return !timestamp || isWithinDashboardWindow(timestamp);
+}
+
+function isSameLocalDate(value, referenceDate = new Date()) {
+  const date = parseDateValue(value);
+  return (
+    !!date &&
+    date.getFullYear() === referenceDate.getFullYear() &&
+    date.getMonth() === referenceDate.getMonth() &&
+    date.getDate() === referenceDate.getDate()
+  );
+}
+
+function countItemsCreatedToday(items, referenceDate = new Date()) {
+  if (!Array.isArray(items)) {
+    return 0;
+  }
+  const seen = new Set();
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const createdAt = pickTimestampValue(item, [
+      "created_at",
+      "created_time",
+      "created",
+      "published_at",
+      "publish_time"
+    ]);
+    if (!createdAt || !isSameLocalDate(createdAt, referenceDate)) {
+      continue;
+    }
+    const identity = String(
+      item.id ||
+      item.answer_id ||
+      item.url ||
+      item.answer_url ||
+      createdAt
+    );
+    seen.add(identity);
+  }
+  return seen.size;
 }
 
 function toNumber(value) {
@@ -631,6 +694,7 @@ function buildDashboardSnapshotPayload({
   recommendations,
   recommendedAnswers,
   answers,
+  creations,
 }) {
   const capturedAt = dataRefreshedAt || new Date().toISOString();
   return {
@@ -647,6 +711,7 @@ function buildDashboardSnapshotPayload({
     recommendations: recommendations,
     recommended_answers: recommendedAnswers || [],
     answers: answers,
+    creations: creations || [],
   };
 }
 
@@ -922,6 +987,224 @@ function sanitizeAnswers(items) {
     });
 }
 
+function creationDayTimestampRange(referenceDate = new Date()) {
+  const start = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const end = new Date(
+    referenceDate.getFullYear(),
+    referenceDate.getMonth(),
+    referenceDate.getDate(),
+    23,
+    59,
+    59,
+    999
+  );
+  return {
+    start: Math.floor(start.getTime() / 1000),
+    end: Math.floor(end.getTime() / 1000),
+  };
+}
+
+function sanitizeCreations(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .filter((item) => item && typeof item === "object")
+    .map((item) => {
+      const data = item?.data && typeof item.data === "object" ? item.data : {};
+      const reaction = item?.reaction && typeof item.reaction === "object" ? item.reaction : {};
+      const type = String(item?.type || data?.type || "").trim();
+      const id = String(data?.id || item?.id || data?.url_token || "").trim();
+      const questionId = String(data?.question_id || "").trim();
+      const createdAt =
+        data?.created_time ||
+        data?.created_at ||
+        data?.created ||
+        item?.created_time ||
+        item?.created_at ||
+        item?.created ||
+        "";
+      const updatedAt =
+        data?.updated_time ||
+        data?.updated_at ||
+        item?.updated_time ||
+        item?.updated_at ||
+        "";
+      return {
+        id: id || `${type}:${createdAt}`,
+        type,
+        title: firstPresentText([data?.title, item?.title]),
+        content: trimText(
+          firstPresentText([
+            data?.excerpt,
+            data?.summary,
+            Array.isArray(data?.content)
+              ? data.content.map((part) => part?.own_text || part?.content || "").join(" ")
+              : data?.content,
+          ]),
+          220
+        ),
+        url:
+          normalizeZhihuUrl(data?.url) ||
+          (type === "answer" && id && questionId
+            ? `https://www.zhihu.com/question/${questionId}/answer/${id}`
+            : "") ||
+          (type === "answer" && id ? `https://www.zhihu.com/answer/${id}` : "") ||
+          (type === "pin" && id ? `https://www.zhihu.com/pin/${id}` : ""),
+        created_at: createdAt,
+        updated_at: updatedAt,
+        read_count: toNumber(reaction?.read_count || reaction?.view_count || 0),
+        voteup_count: toNumber(reaction?.vote_up_count || reaction?.voteup_count || 0),
+        like_count: toNumber(reaction?.like_count || 0),
+        comment_count: toNumber(reaction?.comment_count || 0),
+        collect_count: toNumber(reaction?.collect_count || 0),
+      };
+    })
+    .filter((item) => item.type && item.created_at);
+}
+
+async function loadCreationsResult(referenceDate = new Date()) {
+  const { start, end } = creationDayTimestampRange(referenceDate);
+  const limit = 50;
+  const items = [];
+  let loaded = false;
+  for (let page = 0; page < 5; page += 1) {
+    const offset = page * limit;
+    const url =
+      "https://www.zhihu.com/api/v4/creators/creations/v2/all?" +
+      new URLSearchParams({
+        start: String(start),
+        end: String(end),
+        limit: String(limit),
+        offset: String(offset),
+        need_co_creation: "1",
+        sort_type: "created",
+      }).toString();
+    const result = await fetchZhihuJson(url);
+    if (!result.ok || !result.data) {
+      break;
+    }
+    loaded = true;
+    items.push(...toArray(result.data));
+    if (result.data?.paging?.is_end) {
+      break;
+    }
+  }
+  return {
+    ok: loaded,
+    items: sanitizeCreations(items),
+  };
+}
+
+function countCreationsCreatedToday(creations, type, referenceDate = new Date()) {
+  if (!Array.isArray(creations)) {
+    return 0;
+  }
+  return countItemsCreatedToday(
+    creations.filter((item) => item.type === type),
+    referenceDate
+  );
+}
+
+function contentItemType(item, fallback = "") {
+  if (!item || typeof item !== "object") {
+    return fallback;
+  }
+  const data = item?.data && typeof item.data === "object" ? item.data : {};
+  return String(
+    item?.type ||
+      item?.content_type ||
+      item?.item_type ||
+      data?.type ||
+      data?.content_type ||
+      fallback
+  )
+    .trim()
+    .toLowerCase();
+}
+
+function contentMetricValue(item, fields) {
+  if (!item || typeof item !== "object") {
+    return 0;
+  }
+  const data = item?.data && typeof item.data === "object" ? item.data : {};
+  const reaction = item?.reaction && typeof item.reaction === "object" ? item.reaction : {};
+  const answer = item?.answer && typeof item.answer === "object" ? item.answer : {};
+  for (const source of [item, reaction, data, answer]) {
+    for (const field of fields) {
+      const parsed = parseNumericValue(source?.[field]);
+      if (parsed !== null && parsed > 0) {
+        return Math.floor(parsed);
+      }
+    }
+  }
+  return 0;
+}
+
+function sumContentMetricCreatedToday(
+  items,
+  fields,
+  contentTypes,
+  referenceDate = new Date(),
+  fallbackType = ""
+) {
+  if (!Array.isArray(items)) {
+    return 0;
+  }
+  const allowedTypes = new Set(contentTypes);
+  let total = 0;
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    if (!allowedTypes.has(contentItemType(item, fallbackType))) {
+      continue;
+    }
+    const createdAt = pickTimestampValue(item, [
+      "created_at",
+      "created_time",
+      "created",
+      "published_at",
+      "publish_time",
+    ]);
+    if (!createdAt || !isSameLocalDate(createdAt, referenceDate)) {
+      continue;
+    }
+    total += contentMetricValue(item, fields);
+  }
+  return total;
+}
+
+function contentMetricHighWater(creations, answers, metric, referenceDate = new Date()) {
+  const fields = CREATOR_CONTENT_METRIC_FIELDS[metric] || [];
+  if (!fields.length) {
+    return 0;
+  }
+  return Math.max(
+    sumContentMetricCreatedToday(
+      creations,
+      fields,
+      TODAY_CONTENT_TYPES,
+      referenceDate
+    ),
+    sumContentMetricCreatedToday(
+      answers,
+      fields,
+      LEGACY_ANSWER_CONTENT_TYPES,
+      referenceDate,
+      "answer"
+    )
+  );
+}
+
 function pickAvatar(profile) {
   if (!profile || typeof profile !== "object") {
     return "liukanshan-avatar.jpg";
@@ -983,14 +1266,76 @@ function findMetricFromPayloads(payloads, aliases) {
   return 0;
 }
 
+function findFirstMetricFromPayloads(payloads, aliases) {
+  for (const payload of payloads) {
+    const value = findMetricValue(payload, aliases);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function findTodayDatedMetric(payload, aliases, referenceDate = new Date()) {
+  let best = null;
+  const visit = (node) => {
+    if (best !== null || node === null || node === undefined || typeof node !== "object") {
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+        if (best !== null) {
+          return;
+        }
+      }
+      return;
+    }
+    const timestamp = pickTimestampValue(node, [
+      ...DASHBOARD_ITEM_TIME_FIELDS,
+      "date",
+      "day",
+      "dt",
+      "stats_date",
+      "stat_date"
+    ]);
+    if (timestamp && isSameLocalDate(timestamp, referenceDate)) {
+      const value = findMetricValue(node, aliases);
+      if (value !== null) {
+        best = value;
+        return;
+      }
+    }
+    for (const value of Object.values(node)) {
+      visit(value);
+      if (best !== null) {
+        return;
+      }
+    }
+  };
+  visit(payload);
+  return best;
+}
+
 function findTodayMetric({ homepageData, dailyData, aggrData }, metric) {
-  return findMetricFromPayloads(
+  const explicitTodayValue = findFirstMetricFromPayloads(
     [homepageData, dailyData, aggrData],
-    [
-      ...(HOMEPAGE_TODAY_METRIC_FIELDS[metric] || []),
-      ...(CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []),
-    ]
+    HOMEPAGE_TODAY_METRIC_FIELDS[metric] || []
   );
+  if (explicitTodayValue !== null) {
+    return explicitTodayValue;
+  }
+  const aggrTodayValue = findMetricValue(
+    aggrData?.today,
+    CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []
+  );
+  if (aggrTodayValue !== null) {
+    return aggrTodayValue;
+  }
+  return findTodayDatedMetric(
+    dailyData,
+    CREATOR_ANALYSIS_METRIC_FIELDS[metric] || []
+  ) ?? 0;
 }
 
 async function fetchZhihuJson(url) {
@@ -1413,8 +1758,47 @@ async function loadAnswers(memberSlug) {
   };
 }
 
+function collectMissingCreatorDashboardSources({
+  homepageResult,
+  dailyResult,
+  aggrResult,
+  recommendResult,
+  momentsResult,
+  answersResult,
+  creationsResult,
+}) {
+  const missing = [];
+  if (!homepageResult?.ok) {
+    missing.push("creator_homepage");
+  }
+  if (!dailyResult?.ok) {
+    missing.push("creator_daily");
+  }
+  if (!aggrResult?.ok) {
+    missing.push("creator_aggr");
+  }
+  if (recommendResult && !recommendResult.ok) {
+    missing.push("creator_recommend");
+  }
+  if (momentsResult && !momentsResult.ok) {
+    missing.push("moments");
+  }
+  if (answersResult && !answersResult.ok) {
+    missing.push("creator_answers");
+  }
+  if (creationsResult && !creationsResult.ok) {
+    missing.push("creator_creations");
+  }
+  return missing;
+}
+
 async function loadDashboardData(options = {}) {
   const silent = !!(options && typeof options === "object" && options.silent);
+  const requireComplete = !!(
+    options &&
+    typeof options === "object" &&
+    options.requireComplete
+  );
   const reportAfterLoad = !!(
     options &&
     typeof options === "object" &&
@@ -1495,9 +1879,26 @@ async function loadDashboardData(options = {}) {
       setTodayMetric(todayReadEl, 0, todayReadTimeEl, "-");
       setTodayMetric(todayAgreeEl, 0, todayAgreeTimeEl, "-");
       setTodayMetric(todayCommentEl, 0, todayCommentTimeEl, "-");
+      setTodayMetric(todayFavoriteEl, 0, todayFavoriteTimeEl, "-");
       setTodayMetric(todayMessageEl, 0, todayMessageTimeEl, "-");
       renderRecommendations(pickRecommendList(recommendResult?.data || []));
       renderAnswers([]);
+      latestDashboardPayload = null;
+      return;
+    }
+
+    const missingRequiredSources = collectMissingCreatorDashboardSources({
+      homepageResult,
+      dailyResult,
+      aggrResult,
+      recommendResult,
+      momentsResult,
+    });
+    if (requireComplete && missingRequiredSources.length > 0) {
+      if (!silent) {
+        dashboardStatusEl.textContent =
+          `刷新失败：创作源数据未完整返回：${missingRequiredSources.join(", ")}`;
+      }
       latestDashboardPayload = null;
       return;
     }
@@ -1531,32 +1932,89 @@ async function loadDashboardData(options = {}) {
     const aggrData = aggrResult.ok ? aggrResult.data : null;
     const todaySource = { homepageData, dailyData, aggrData };
 
-    const readCount = findTodayMetric(todaySource, "read");
-    const agreeCount = voteCount;
-    const agreeTime = noticeTime || "刚刚";
-    const commentToday = findTodayMetric(todaySource, "comment");
-
-    setTodayMetric(todayReadEl, readCount, todayReadTimeEl, "今天");
-    setTodayMetric(todayAgreeEl, agreeCount, todayAgreeTimeEl, agreeTime);
-    setTodayMetric(todayCommentEl, commentToday, todayCommentTimeEl, "今天");
-    setTodayMetric(todayMessageEl, unread, todayMessageTimeEl, noticeTime || "刚刚");
+    const rawReadCount = findTodayMetric(todaySource, "read");
+    const rawAgreeCount = findTodayMetric(todaySource, "agree");
+    const rawCommentToday = findTodayMetric(todaySource, "comment");
+    const rawFavoriteToday = findTodayMetric(todaySource, "favorite");
+    const explicitAnswerToday = findTodayMetric(todaySource, "answer");
+    const explicitThoughtToday = findTodayMetric(todaySource, "thought");
 
     const recommendations = sanitizeRecommendationList(pickRecommendList(recommendResult?.data || []));
     renderRecommendations(recommendations);
     const recommendedAnswers = sanitizeRecommendedAnswers(toArray(momentsResult?.data || []));
 
     const memberSlug = pickMemberSlug(meData);
-    const answersResult = await loadAnswers(memberSlug);
+    const [answersResult, creationsResult] = await Promise.all([
+      loadAnswers(memberSlug).catch(() => ({
+        ok: false,
+        items: [],
+      })),
+      loadCreationsResult().catch(() => ({
+        ok: false,
+        items: [],
+      })),
+    ]);
+    const missingRequiredListSources = collectMissingCreatorDashboardSources({
+      answersResult,
+      creationsResult,
+    });
+    if (requireComplete && missingRequiredListSources.length > 0) {
+      if (!silent) {
+        dashboardStatusEl.textContent =
+          `刷新失败：创作源数据未完整返回：${missingRequiredListSources.join(", ")}`;
+      }
+      latestDashboardPayload = null;
+      return;
+    }
+
     const answers = answersResult.items || [];
+    const creations = creationsResult.items || [];
     renderAnswers(answers);
+    const readCount = Math.max(
+      rawReadCount,
+      contentMetricHighWater(creations, answers, "read")
+    );
+    const agreeCount = Math.max(
+      rawAgreeCount,
+      contentMetricHighWater(creations, answers, "agree")
+    );
+    const commentToday = Math.max(
+      rawCommentToday,
+      contentMetricHighWater(creations, answers, "comment")
+    );
+    const favoriteToday = Math.max(
+      rawFavoriteToday,
+      contentMetricHighWater(creations, answers, "favorite")
+    );
+    const answerToday = Math.max(
+      explicitAnswerToday,
+      countCreationsCreatedToday(creations, "answer"),
+      countItemsCreatedToday(answers)
+    );
+    const thoughtToday = Math.max(
+      explicitThoughtToday,
+      countCreationsCreatedToday(creations, "pin")
+    );
+
+    setTodayMetric(todayReadEl, readCount, todayReadTimeEl, "今天");
+    setTodayMetric(todayAgreeEl, agreeCount, todayAgreeTimeEl, "今天");
+    setTodayMetric(todayCommentEl, commentToday, todayCommentTimeEl, "今天");
+    setTodayMetric(todayFavoriteEl, favoriteToday, todayFavoriteTimeEl, "今天");
+    setTodayMetric(todayMessageEl, unread, todayMessageTimeEl, noticeTime || "刚刚");
 
     const todayMetrics = {
       read: readCount,
       read_time: "今天",
       agree: agreeCount,
-      agree_time: agreeTime,
+      agree_time: "今天",
       comment: commentToday,
       comment_time: "今天",
+      favorite: favoriteToday,
+      favorite_time: "今天",
+      today_answer_count: answerToday,
+      today_answer_time: "今天",
+      today_thought_count: thoughtToday,
+      today_thought_time: "今天",
       message: unread,
       message_time: noticeTime || "刚刚"
     };
@@ -1597,6 +2055,7 @@ async function loadDashboardData(options = {}) {
       recommendations,
       recommendedAnswers,
       answers,
+      creations,
     });
 
     shouldReportAfterLoad =
@@ -1607,7 +2066,7 @@ async function loadDashboardData(options = {}) {
     if (homeCount > 0) {
       if (!silent) {
         dashboardStatusEl.textContent =
-          "刷新成功：已更新最近 3 天的个人信息、概览、推荐回答与我的回答。";
+          "刷新成功：已更新今日的个人信息、概览、推荐回答与我的回答。";
       }
     } else {
       if (!silent) {
@@ -1671,9 +2130,10 @@ async function syncAndPushDashboard({
   forceReload = false,
   auto = false,
   showStatus = false,
+  requireComplete = false,
 } = {}) {
   if (forceReload) {
-    await loadDashboardData({ silent: auto });
+    await loadDashboardData({ silent: auto, requireComplete });
   }
 
   if (!latestDashboardPayload) {
@@ -1712,7 +2172,7 @@ pushDashboardEl.addEventListener("click", async () => {
     dashboardStatusEl.textContent = "尚未有可上报数据，先刷新后上报…";
   }
   await syncAndPushDashboard({
-    forceReload: !latestDashboardPayload,
+    forceReload: true,
     showStatus: true,
     auto: false
   });
@@ -1725,4 +2185,6 @@ openPopupEl.addEventListener("click", () => {
 
 initTabs();
 startAutoDashboardPush();
-loadDashboardData({ reportAfterLoad: true });
+loadDashboardData({
+  reportAfterLoad: true,
+});

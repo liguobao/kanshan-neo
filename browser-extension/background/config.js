@@ -9,7 +9,7 @@ export const POLL_ALARM = "zhihu-assistant-poll";
 export const DASHBOARD_REPORT_ALARM = "zhihu-assistant-dashboard-report";
 export const DASHBOARD_REPORT_PERIOD_MINUTES = 10;
 export const MESSAGE_STATS_REFRESH_MIN_INTERVAL_MS = 30_000;
-export const DASHBOARD_LOOKBACK_DAYS = 7;
+export const DASHBOARD_LOOKBACK_DAYS = 1;
 export const DASHBOARD_LIST_LIMIT = 40;
 export const DASHBOARD_MOMENTS_LIMIT = 60;
 export const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -26,7 +26,7 @@ export const BROWSER_MESSAGE_WS_PATH = "/api/browser/messages/ws";
 export const BROWSER_MESSAGE_WS_TOKEN_PROTOCOL = "kanshan-browser-token";
 export const BROWSER_MESSAGE_WS_PING_MS = 20_000;
 export const BROWSER_MESSAGE_WS_RECONNECT_MS = 5_000;
-export const BROWSER_DASHBOARD_PUSH_URL = "/api/browser/dashboard";
+export const BROWSER_DASHBOARD_PUSH_URL = "/api/browser/dashboard/v2";
 export const DASHBOARD_PUSH_SOURCE = "browser_extension";
 export const BROWSER_ID_PREFIX = "browser-";
 export const BROWSER_ID_CODE_LENGTH = 10;
@@ -70,12 +70,24 @@ export const HOMEPAGE_TODAY_METRIC_FIELDS = {
   read: ["today_read_count"],
   agree: ["today_upvoted_count", "today_incr_upvoted_count"],
   comment: ["today_comment_count", "today_comment_num", "today_comments_count"],
+  favorite: ["today_favorite_count", "today_favorites_count", "today_collect_count"],
+  answer: ["today_answer_count", "today_answers_count"],
+  thought: ["today_thought_count", "today_thoughts_count", "today_pin_count"],
 };
 
 export const CREATOR_ANALYSIS_METRIC_FIELDS = {
   read: ["read_count", "reads", "view_count", "views_count", "pv", "pv_count"],
-  agree: ["voteup_count", "agree_count", "like_count", "upvote_count", "vote_count"],
-  comment: ["comment_count", "comments_count", "comment_num"],
+  agree: [
+    "new_upvote",
+    "new_incr_upvote_num",
+    "incr_upvote_num",
+    "upvote",
+    "voteup_count",
+    "agree_count",
+    "upvote_count",
+  ],
+  comment: ["comment", "comment_count", "comments_count", "comment_num"],
+  favorite: ["collect", "favorite_count", "favorites_count", "collect_count", "collection_count"],
 };
 
 export const DASHBOARD_ITEM_TIME_FIELDS = [
